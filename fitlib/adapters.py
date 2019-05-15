@@ -24,7 +24,7 @@ Three arguments to the constructor are:
                     this adapter is responsible for.
 
 The adapter might keep references to these dictionaries and is expected to
-mark some parameters in `param_dict` as its own (by setting the `adapter` field).
+mark some parameters in `param_dict` as its own (by setting the `has_adapter` field).
 
 The adapter should support following methods:
 
@@ -67,7 +67,7 @@ class EasyAdapter:
         self.__fh_bounds = fit_bounds
         self.parameters = {}
 
-    def add_parameter(self, name, default_value):
+    def add_parameter(self, name, default_value, needs_initial_value=False):
         if name not in self.param_dict:
             # User doesn't care about this parameter.
             # I daresay we don't need it
@@ -78,6 +78,8 @@ class EasyAdapter:
 
             if p.has_initial_value:
                 value = p.initial_value
+            elif needs_initial_value:
+                raise ValueError(f'No initial value found for {name}.')
             else:
                 value = default_value
 
@@ -125,3 +127,68 @@ class EasyAdapter:
             if param.multiplicity > 1:
                 coeff_name += '[]'
             coeff_dict[coeff_name] = param.full_value
+
+
+class BuildingAdapter(EasyAdapter):
+    '''BuldingAdapter is a base class for adapters that need to make a set of objects
+    fittable.'''
+   
+    def read_guess(self, guess, i=None):
+        super().read_guess(guess, i)
+        self.build_values(i)
+            
+    def get_parameter(self, name, needs_initial_value=True):
+        if name not in self.param_dict:
+            raise ValueError(f"{name} argument is needed for {self.__class__.__name__}"
+                              " but it is not in the workhorse signature")
+
+        if needs_initial_value and not self.param_dict[name].has_initial_value:
+            raise ValueError(f"{name} argument is needed for {self.__class__.__name__}"
+                              " but no value was supplied")
+        
+        return self.param_dict[name]
+    
+
+def NamedTupleAdapter(tuple_name, tuple_class):
+    '''This function creates an adapter class for fitting named tuples of class `tuple_class`.
+    `tuple_name` should be the name of the workhorse argument of this type.'''
+    return type(f"NamedTupleAdapter_{tuple_class.__name__}_{tuple_name}",
+                (NamedTupleAdapter_base,),
+                {"tuple_parameter_name":tuple_name,
+                 "tuple_class":tuple_class})
+
+
+
+class NamedTupleAdapter_base(BuildingAdapter):
+    tuple_class = None
+    tuple_parameter_name = None
+
+    def __new__(cls, *args):
+        if cls == NamedTupleAdapter_base:
+            raise ValueError("NamedTupleAdapter_base cannot be initialized directly")
+        elif cls.tuple_class is None:
+            raise ValueError("NamedTupleAdapter need to know the tuple's class to work")
+        else:
+            return object.__new__(cls)
+    
+    def __init__(self, *args):
+        super().__init__(*args)
+        
+        self.tuple_obj = self.get_parameter(self.tuple_parameter_name, needs_initial_value=False)
+        self.tuple_obj.fitted=True
+        self.tuple_obj.has_adapter=True
+        
+        for field in self.tuple_class._fields:
+            needs_initial_value = False
+            if self.tuple_obj.has_initial_value:
+                initial_value = self.tuple_obj.initial_value._asdict()[field]
+            elif field in self.tuple_class._fields_defaults:
+                initial_value = self.tuple_class._fields_defaults[field]
+            else:
+                initial_value = None
+                needs_initial_value = True
+            self.add_parameter(field, initial_value, needs_initial_value)
+
+    def build_values(self, i):
+        tuple_dict = {pname:p.value_at(i) for pname,p in self.parameters.items()}
+        self.tuple_obj.current_value = self.tuple_class(**tuple_dict)            

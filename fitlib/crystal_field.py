@@ -1,97 +1,93 @@
 'Adapters for working with the JLS library'
 
-from .adapters import EasyAdapter
+from .adapters import BuildingAdapter
 
-class ZTAdapter(EasyAdapter):
-    """"""
+class ZTAdapter_base(BuildingAdapter):
+    """This will fit magnetic field in either cartesian or spherical components"""
 
     def __new__(cls, *args):
-        if cls == ZTAdapter:
+        if cls == ZTAdapter_base:
             raise ValueError("ZTAdapter cannot be initialized directly")
         else:
-            return super().__new__(cls, *args)
+            return super().__new__(cls)
 
     def __init__(self, *args):
         super().__init__(*args)
 
-        if self.quantum_system_name not in self.params_dict:
-            raise ValueError("{} argument is needed for crystal field"
-                             " but it is not in the workhorse signature".format(
-                                 self.quantum_system_name))
+        self.atom = self.get_parameter(self.quantum_system_name)
+        self.atom.has_adapter = True
+        self.atom = self.atom.initial_value
+        self.ZT = self.__class__.zt_accessor(self.atom)
 
-        if not self.params_dict[self.quantum_system_name].has_initial_value:
-            raise ValueError("{} argument is needed for crystal field to be fitted"
-                             " but non value was supplied".format(self.quantum_system_name))
-
-        self.atom = self.params_dict[self.quantum_system_name].initial_value
-        self.ZT = self.zt_accessor(self.atom)
-
-        self.fit_fields = []
-
-        for field in ['Bx', 'By', 'Bz', 'Br', 'Btheta', 'Bphi']:
-            if field in self.params_dict:
-                self.add_parameter(field, self.ZT.__getattribute__(field))
+        self.cartesian = 'Bx' in self.param_dict or 'By' in self.param_dict or 'Bz' in self.param_dict
+        self.spherical = 'Br' in self.param_dict or 'Btheta' in self.param_dict or 'Bphi' in self.param_dict
+        
+        if self.cartesian and self.spherical:
+            raise ValueError('Cannot fit in cartesian and spherical coordinates simultaneously')
+            
+        if self.cartesian:
+            for field in ['Bx', 'By', 'Bz']:
+                if field in self.param_dict:
+                    self.add_parameter(field, self.ZT.__getattribute__(field))
+                    
+        elif self.spherical:
+            for field in ['Br', 'Btheta', 'Bphi']:
+                if field in self.param_dict:
+                    self.add_parameter(field, self.ZT.__getattribute__(field))
 
         self.add_parameter('g', self.ZT.gFactor)
 
-    def read_guess(self, guess, i=None):
-        super().fill_params(i)
-        ## This needs some thinking
-#        self.ZT.setg(self.parameters['g'])
-        self.ZT.makeNotReady()
-
-def gen_ZTAdapter(quantum_system_name, zt_accessor=lambda o: o.ZT):
+    def build_values(self, guess, i=None):
+        if self.parameters['g'].fitted: # Just in case nothing is fitted
+            self.ZT.setg(self.parameters['g'].value_at(i))
+            
+        if self.cartesian:
+            self.ZT.setBxyz(self.parameters['Bx'].value_at(i),
+                            self.parameters['By'].value_at(i),
+                            self.parameters['Bz'].value_at(i))
+        
+        elif self.spherical:
+            self.ZT.setBrtp(self.parameters['Br'].value_at(i),
+                            self.parameters['Btheta'].value_at(i),
+                            self.parameters['Bphi'].value_at(i))
+        
+def ZTAdapter(quantum_system_name, zt_accessor=lambda o: o.ZT):
     return type("ZTAdapter_{}".format(quantum_system_name),
-                (ZTAdapter,),
+                (ZTAdapter_base,),
                 {"quantum_system_name":quantum_system_name,
                  "zt_accessor":zt_accessor})
 
-class CFAdapter(EasyAdapter):
+class CFAdapter_base(BuildingAdapter):
 
     def __new__(cls, *args):
-        if cls == CFAdapter:
+        if cls == CFAdapter_base:
             raise ValueError("CFAdapter cannot be initialized directly")
         else:
-            return super().__new__(cls, *args)
+            return super().__new__(cls)
 
-    def __init__(self,
-                 multi_fit_N, # 2D fit or not?
-                 params_dict,
-                 params_bounds,
-                 ):
-        super().__init__(multi_fit_N,
-                         params_dict,
-                         params_bounds
-                         )
+    def __init__(self, *args):
+        super().__init__(*args)
 
-        if self.quantum_system_name not in params_dict:
-            raise ValueError("{} argument is needed for crystal field"
-                             " but it is not in the workhorse signature".format(
-                                 self.quantum_system_name))
+        self.atom = self.get_parameter(self.quantum_system_name)
+#        self.atom.has_adapter = True
+        self.atom = self.atom.initial_value
 
-        if not params_dict[self.quantum_system_name].has_initial_value:
-            raise ValueError("{} argument is needed for crystal field to be fitted"
-                             " but non value was supplied".format(self.quantum_system_name))
-
-        self.atom = params_dict[self.quantum_system_name].initial_value
-        self.CF = self.cf_accessor(self.atom)
+        self.CF = self.__class__.cf_accessor(self.atom)
         self.fitted_orders = []
 
         for j, (n, m) in enumerate(self.CF.orders):
             pname = "CF_{}_{}".format(n,m)
-            if pname in params_dict:
+            if pname in self.param_dict:
                 self.add_parameter(pname, self.CF.coeff[j])
                 self.fitted_orders.append((pname, j))
 
-    def read_guess(self, guess, i=None):
-        super().read_guess(guess, i)
-        if i is not None:
-            for pname, j in self.fitted_orders:
-                self.CF.coeffs[j] = self.params_dict[pname].current_value
-            self.CF.makeNotReady()
+    def build_values(self, guess, i=None):
+        for pname, j in self.fitted_orders:
+            self.CF.coeffs[j] = self.param_dict[pname].current_value
+        self.CF.makeNotReady()
 
-def gen_CFAdapter(quantum_system_name, cf_accessor=lambda o: o.CF):
+def CFAdapter(quantum_system_name, cf_accessor=lambda o: o.CF):
     return type("CFAdapter_{}".format(quantum_system_name),
-                (CFAdapter,),
+                (CFAdapter_base,),
                 {"quantum_system_name":quantum_system_name,
                  "cf_accessor":cf_accessor})

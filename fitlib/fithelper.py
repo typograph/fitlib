@@ -6,7 +6,7 @@ from collections import defaultdict
 import matplotlib
 import matplotlib.pyplot as plt
 from scipy.optimize import least_squares
-from numpy import inf, sqrt, diag, zeros_like, finfo, amax, asanyarray, zeros
+from numpy import inf, sqrt, diag, zeros_like, finfo, amax, asanyarray, zeros, prod
 from numpy.linalg import svd
 
 #from collections import namedtuple
@@ -14,17 +14,11 @@ from numpy.linalg import svd
 from .adapters import EasyAdapter
 from .parameters import SuppliedParameter, ParameterKind, convert_param_kind
 
-def resize_list(l, n, default=None):
-    """Make sure that the list `l` has at least `n` items.
-    When expanding, add elements with value `default`."""
-    if len(l) < n:
-        l.extend([default]*(n-len(l)))
-
 class DefaultAdapter(EasyAdapter):
     """This is a `ParamAdapter` that is used internally after all other adapters
     have executed.
 
-    It assumes scalar parameters
+    It can only fit simple numeric parameters.
     """
     def __init__(self, *args):
         super().__init__(*args)
@@ -53,13 +47,14 @@ class FitHelper:
     as the sole parameter.
 
     There is no limit on the signature of the workhorse. It is recommended
-    to place constant arguments first and fit parameters second, but it is
+    to place constant arguments first and fit parameters second, but this is
     not a requirement.
 
     If the workhorse uses non-scalar parameters (lists, objects or similar)
     use a `ParamAdapter` to switch between parameter representations.
 
     To use the fitter, call the `fit()` function with appropriate parameters.
+    To plot the result, call the `plot()` function using the result of `fit()`.
     """
     def __init__(self, workhorse):
         self.workhorse = workhorse
@@ -83,9 +78,11 @@ class FitHelper:
 
     def set_bounds(self, parameter, lower, upper):
         """In the case some parameters to the workhorse have to be constrained
-        during the fit, add an appropriate bound using this method. The parameter
-        is a string for parameter name, upper and lower are the bounds.
-        Use (`-np.inf`,`np.inf`) if there are no constraints.
+        during the fit, add an appropriate bound using this method. `parameter`
+        should be the name of the respective parameter (either defined by an
+        adapter, or present in the workhorse signature), `upper` and `lower`
+        are the respective bounds.
+        Use `-np.inf` and `np.inf` if there are no constraints.
         """
         if lower == -inf and upper == inf:
             if parameter in self.bounds:
@@ -94,9 +91,9 @@ class FitHelper:
             self.bounds[parameter] = (lower, upper)
 
     def add_adapter_class(self, adapter_class):
-        """An adapter reformats the list of arguments for the workhorse.
-        It accepts a dict and returns another dict. The adapters are instantiated
-        and executed in the order they are added.
+        """An adapter reformats the list of arguments for the workhorse, exposing
+        internal parameters of complex objects. The adapters are instantiated
+        and called in the order they are added.
 
         Note that a new adapter is created every time the `fit()` function is called.
         """
@@ -105,15 +102,10 @@ class FitHelper:
     def fill_param_dict(self, args, kwargs,
                               fit_params, const_array_params,
                               coeff_dict, multi_fit_N):
-        """Fill a dict based on the fit call arguments. For every parameter
-        try to determine initial value and multifit options
+        """Fill a dict based on the `fit` call arguments. For every parameter
+        try to determine initial value and multifit options.
         """
-        #
-        # Every kwarg in fit_params becomes a parameter to helper
-        # Every kwarg not in fit_params but in workhorse parameters becomes
-        # a parameter to the workhorse
-        # Every other kwarg goes to least_squares
-
+        
         param_dict = {k:SuppliedParameter(name=p.name,
                                           has_initial_value=p.has_initial_value,
                                           initial_value=p.initial_value,
@@ -122,9 +114,11 @@ class FitHelper:
                                           index=p.index)
                       for k, p in self.initial_param_dict.items()}
 
+        ## Populate from args:
+        
         for i, wh_arg in enumerate(args):
 
-            # This is a bit stupid, but
+            # Find a parameter with this index
             params = [p for p in param_dict.values() if p.index == i]
             if params:
                 p = params[0]
@@ -159,56 +153,7 @@ class FitHelper:
                                      self.workhorse.__name__,
                                      i, len(args)))
 
-        ## Sort kwargs
-
-        for wh_kwarg in kwargs:
-            if wh_kwarg not in param_dict:
-                param_dict[wh_kwarg] = SuppliedParameter(wh_kwarg)
-            param_dict[wh_kwarg].initial_value = kwargs[wh_kwarg]
-
-        ## Sort fit_params:
-
-        for pname in fit_params:
-            if pname.endswith('[]'):
-                pname = pname[:-2]
-                if multi_fit_N > 1:
-                    p_multiplicity = multi_fit_N
-                else:
-                    raise ValueError("Cannot use an array parameter"
-                                     " for {}: y data is 1D".format(pname))
-            else:
-                p_multiplicity = 1
-
-            if pname in param_dict:
-                param_dict[pname].fitted = True
-                param_dict[pname].multiplicity = p_multiplicity
-            else:
-                param_dict[pname] = \
-                    SuppliedParameter(
-                        name=pname,
-                        fitted=True,
-                        multiplicity=p_multiplicity,
-                    )
-
-        ## Sort const_array_params:
-
-        for pname in const_array_params:
-            if pname.endswith('[]'):
-                pname = pname[:-2]
-
-            if pname in param_dict:
-                if param_dict[pname].fitted:
-                    raise ValueError("{} cannot be a constant"
-                                     " and be fitted at the same time".format(pname))
-                param_dict[pname].multiplicity = multi_fit_N
-            else:
-                param_dict[pname] = \
-                    SuppliedParameter(
-                        name=pname,
-                        multiplicity=multi_fit_N,
-                    )
-
-        # Sort coeff_dict
+        ## Populate from coeff_dict
 
         def unwrap_pm_value(value):
             if isinstance(value, tuple):
@@ -237,8 +182,6 @@ class FitHelper:
 
             if pname in param_dict:
                 p = param_dict[pname]
-                if p.has_initial_value:
-                    continue
                 if p.multiplicity is None:
                     if multivalue:
                         if len(value) != multi_fit_N:
@@ -292,6 +235,55 @@ class FitHelper:
                 else:
                     param_dict[pname] = SuppliedParameter(pname, multiplicity=p_multiplicity)
                 param_dict[pname].initial_value = value
+                
+        ## Populate from kwargs
+
+        for wh_kwarg in kwargs:
+            if wh_kwarg not in param_dict:
+                param_dict[wh_kwarg] = SuppliedParameter(wh_kwarg)
+            param_dict[wh_kwarg].initial_value = kwargs[wh_kwarg]
+
+        ## Populate from fit_params:
+
+        for pname in fit_params:
+            if pname.endswith('[]'):
+                pname = pname[:-2]
+                if multi_fit_N > 1:
+                    p_multiplicity = multi_fit_N
+                else:
+                    raise ValueError("Cannot use an array parameter"
+                                     " for {}: y data is 1D".format(pname))
+            else:
+                p_multiplicity = 1
+
+            if pname in param_dict:
+                param_dict[pname].fitted = True
+                param_dict[pname].multiplicity = p_multiplicity
+            else:
+                param_dict[pname] = \
+                    SuppliedParameter(
+                        name=pname,
+                        fitted=True,
+                        multiplicity=p_multiplicity,
+                    )
+
+        ## Populate from const_array_params:
+
+        for pname in const_array_params:
+            if pname.endswith('[]'):
+                pname = pname[:-2]
+
+            if pname in param_dict:
+                if param_dict[pname].fitted:
+                    raise ValueError("{} cannot be a constant"
+                                     " and be fitted at the same time".format(pname))
+                param_dict[pname].multiplicity = multi_fit_N
+            else:
+                param_dict[pname] = \
+                    SuppliedParameter(
+                        name=pname,
+                        multiplicity=multi_fit_N,
+                    )
 
         # Everything that has multiplicity None should have 1 instead
 
@@ -333,20 +325,23 @@ class FitHelper:
 
         The rest of the parameters are keyword parameters. Every keyword parameter that
         matches a workhorse parameter and is in `fit_params` will be fitted. Its value will
-        be used as an initial value. In the case of 2D fitting such a parameter, the initial
-        value should be a list of appropriate length. Workhorse parameters that are not in
-        `fit_params` will be used as constant values. In the case a workhorse parameter
-        is not supplied to the `fit()` function as a keyword argument, its initial value
-        will be zero (or as defined by an adapter). In the case a keyword argument is
-        not a workhorse argument, it will be passed on to `least_squares`.
+        be used as an initial value. In the case of individual fitting of a parameter to various curves,
+        the initial value should be a list of appropriate length. Workhorse parameters that are not in
+        `fit_params` will have constant values. Every argument of the workhorse should
+        be supplied with an initial value, either directly in the `fit()` call, or
+        as a default value in the workhorse definition. Supplying a keyword argument that is
+        not a workhorse argument, and is not understood by an adapter is a runtime error.
 
         `fit()` also takes the following keyword arguments:
 
         `const_array_params` is a list of parameters that are constant arrays, that is they
-        are not fitted but should be initialized to different values for different curves.
+         are not fitted but should be initialized to different values for different curves.
+        `lstsq_kwargs` is a dictionary of keyword parameteres for `scipy.optimize.least_squares()`.
+        `coeff_dict` is a dictionary returned by a previous run of the `fit()` function. The values
+          in the dictionary will be used as initial values, unless they were specified in a different form.
 
         `fit()` returns a dictionary of workhorse arguments, including both fitted and constant
-          parameters, but excluding the ones passed as simple arguments.
+          parameters.
 
         """
 
@@ -397,67 +392,45 @@ class FitHelper:
         # for fitted parameters
         # In the multifit case, wh_args is a tuple of lists.
 
-        wh_args = []
-        wh_kwargs = {}
+        wh_args = [None for p in param_dict.values() if p.kind == ParameterKind.POSITIONAL]
+        wh_kwargs = {} # {p.name:None for p in param_dict.values() if p.kind == ParameterKind.KEYWORD}
 
         def fill_wh_args(args, kwargs, pdict):
             for p in pdict.values():
                 if p.kind == ParameterKind.POSITIONAL:
-                    resize_list(args, p.index+1)
                     args[p.index] = p.current_value
                 elif p.kind == ParameterKind.KEYWORD:
                     kwargs[p.name] = p.current_value
-
+                    
         fill_wh_args(wh_args, wh_kwargs, param_dict)
-
 
         ## least_squares takes a function of form fun(p, *args, **kwargs)
         # that returns a 1D array, and minimizes sum of squares
         #
         # We need to coerse the workhorse to this form
         # flattening Y if multifitting.
-        #
-        # The first step is `flatcomp`, that takes a functon of form
-        # fun(xdata, p) that should return an array in the same
-        # shape as ydata
-
-        def flatcomp(helper, xdata, ydata):
-            def sub(p_values):
-                return (helper(xdata, p_values) - ydata).flatten()
-            return sub
-
-        # The second step is the helper function
-        # that have the right form for `flatcomp`
-        # We effectively define two of those,
-        # one for multifitting, one for 1D fitting.
-        #
-        # Both use adapters to convert between the flat parameter array
-        # supplied by least_squares and the argument list
-        # for workhorse.
-
-        def unsafe_fill_wh_args(args, kwargs, pdict):
-            for p in pdict.values():
-                if p.fitted or p.multiplicity > 1:
-                    if p.kind == ParameterKind.POSITIONAL:
-                        args[p.index] = p.current_value
-                    elif p.kind == ParameterKind.KEYWORD:
-                        kwargs[p.name] = p.current_value
+        # The helper function uses adapters to convert between
+        # the flat parameter array supplied by least_squares
+        # and the argument list for workhorse.
 
         def helper(x_data, p_values):
             p_values = list(p_values)
+            for adapter in param_adapters:
+                adapter.read_guesses(p_values)
+
+            def single_guess(i):
+                for adapter in param_adapters:
+                    adapter.read_single_guess(p_values, i)
+                fill_wh_args(wh_args, wh_kwargs, param_dict)
+                return self.workhorse(x_data, *wh_args, **wh_kwargs)          
+                
             if multi_fit:
                 y_data = zeros_like(ydata)
                 for i in range(multi_fit_N):
-                    for adapter in param_adapters:
-                        adapter.read_guess(p_values, i)
-                    unsafe_fill_wh_args(wh_args, wh_kwargs, param_dict)
-                    y_data[i] = self.workhorse(x_data, *wh_args, **wh_kwargs)
+                    y_data[i] = single_guess(i)
                 return y_data
             else:
-                for adapter in param_adapters:
-                    adapter.read_guess(p_values, 0)
-                unsafe_fill_wh_args(wh_args, wh_kwargs, param_dict)
-                return self.workhorse(x_data, *wh_args, **wh_kwargs)
+                return single_guess(0)
 
         ## Do the actual fit.
         # This uses 'lm' method of least_squares for bounded
@@ -470,7 +443,7 @@ class FitHelper:
         else:
             lstsq_method = 'lm'
 
-        result = least_squares(flatcomp(helper, xdata, ydata),
+        result = least_squares(lambda p_values : (helper(xdata, p_values) - ydata).flatten(),
                                fit_vars,
                                bounds=fit_bounds,
                                method=lstsq_method,
@@ -589,13 +562,12 @@ class FitHelper:
         # for fitted parameters
         # In the multifit case, wh_args is a tuple of lists.
 
-        wh_args = []
+        wh_args = [None for p in param_dict.values() if p.kind == ParameterKind.POSITIONAL]
         wh_kwargs = {}
 
         def fill_wh_args(args, kwargs, pdict):
             for p in pdict.values():
                 if p.kind == ParameterKind.POSITIONAL:
-                    resize_list(args, p.index+1)
                     args[p.index] = p.current_value
                 elif p.kind == ParameterKind.KEYWORD:
                     kwargs[p.name] = p.current_value
@@ -608,11 +580,13 @@ class FitHelper:
         exp_labels = []
         fit_labels = []
 
+        for adapter in param_adapters:
+            adapter.read_guesses(fit_vars)
         if multi_fit:
             wh_data = zeros((multi_fit_N, len(xdata)))
             for i in range(multi_fit_N):
                 for adapter in param_adapters:
-                    adapter.read_guess(fit_vars, i)
+                    adapter.read_single_guess(fit_vars, i)
                 fill_wh_args(wh_args, wh_kwargs, param_dict)
 
                 wh_data[i] = self.workhorse(xdata, *wh_args, **wh_kwargs)
@@ -627,7 +601,7 @@ class FitHelper:
         else:
             wh_data = zeros_like(xdata)
             for adapter in param_adapters:
-                adapter.read_guess(fit_vars, 0)
+                adapter.read_single_guess(fit_vars, 0)
             fill_wh_args(wh_args, wh_kwargs, param_dict)
 
             wh_data = self.workhorse(xdata, *wh_args, **wh_kwargs)
@@ -690,14 +664,16 @@ class FitHelper:
         `xdata` is a 1D array of x-axis values (shape `(m,)`).
         `ydata` is a 1D or 2D array of data values (shape `(n, m)`).
 
-        `plot_initial` will plot a graph for the initial guess if True.
+        `plot_ydata` will plot a scatterplot for the supplied data if True.
         `plot_vertical_offset` is a number to use for offsetting different curves in the final plot.
         `plot_legend_param` is a name of a workhorse argument.
         `plot_legend_fmt` is a label to attach to every plot. It is a formatting string
           with two possible arguments: *plotkind* that is a string 'Initial', 'Experiment' or 'Fit',
           and *value* that is the value of the fit parameter selected by `plot_legend_param`.
-        `legend_kwargs` is a dictionary that will be passed to `legend()` as keyword arguments.
+        `legend_kwargs` is a dictionary that will be passed to `pylab.legend()` as keyword arguments.
           One can use it to specify e.g. legend location on the graph.
+        `plot_kwargs` is a dictionary that will be passed to `pylab.plot()` as keyword arguments.
+          One can use it to specify e.g. a linestyle.       
 
         """
 

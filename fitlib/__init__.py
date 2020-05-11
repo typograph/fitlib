@@ -48,24 +48,42 @@ Note that:
        fitted variable.
 
 Unlike :fun:`curve_fit()`, however, :mod:`fithelper` allows you to fit a larger variety
-of functions and not only 1D data. Consider the following function::
+of functions and not only 1D data. Consider the function `peakpair`::
 
-    def xas(energies, atom, polarization):
-        ...
 
-This function computes an XAS spectrum at *energies* for X-ray beam with a given
-*polarisation* for a given *atom*. Now, *atom* is a complicated object, containing e.g.
-information about the environment of the atom, and *polarisation* is either 'LV', 'LH',
-'CR' or 'CL' (a string). And suppose you have two spectra measured in the same conditions, 
-but with two different polarisations, _y_cr_ and _y_cl_, and you need to fit the parameters
-of the atom's environment.
+    Peak = namedtuple('Peak', ['A', 'w', 'x0'], defaults=[1,1,0])
+    
+    def gaussian(x, x0, A, w):
+        return A*exp((x-x0)**2/w**2)
 
-    >>> fitter = FitHelper(xas)
-    >>> fitter.add_adapter_class(gen_CFAdapter('atom'))
-    >>> fit_params = fitter.fit(x_data, np.stack((y_cr, y_cl)),
-                                ['a', 'b', 'c'], a=1, b=0, c=0)
+    def peakpair(energies, peak, kind, y0):
+        if kind == 'symmetric':
+            return gaussian(energies, peak.x0, peak.A, peak.w) + \
+                   gaussian(energies, -peak.x0, peak.A, peak.w) + y0
+        elif kind == 'antisymmetric':
+            return gaussian(energies, peak.x0, peak.A, peak.w) + \
+                   gaussian(energies, -peak.x0, -peak.A, peak.w) + y0
+        else:
+            raise ValueError(f"Unknown double peak kind '{kind}'")
+
+This function computes a double peak structure, with either symmetric or antisymmetric peaks.
+Note that the `peak` parameter is a (named) tuple and `kind` is a string. Neither can be 
+fitted directly.
+Now suppose that you have several spectra, some with symmetric, some with antisymmetric peaks,
+but you know that all of them have the same (unknown) width. You can still fit all the data
+simultaniously with just one `FitHelper.fit()` invocation. To do that, you have to add an
+adapter that will split the `peak` object into individual components, supply a 2d array
+of y values to `fit()` and specify which values should be fitted separately for array rows.
+
+    >>> fitter = FitHelper(peakpair)
+    >>> fitter.add_adapter_class(NamedTupleAdapter('peak', Peak))
+    >>> fit_params = fitter.fit(x_data, np.stack((y_sym, y_asym)),
+                                ['A[]', 'w'],
+                                peak=Peak(x0='10.0'),
+                                kind=['symmetric', 'antisymmetric'],
+                                const_array_params=['kind'])
     >>> print(fit_params)
-    {'a': (0.32, 0.01), 'b': (0.55, 0.1), 'c': (3.47, 1.01)}
+    {'A[]': [(0.32, 0.01), ()], 'x0': 10.0, 'peak': Peak(A=1.0, w=1.0, x0=10.0)}
 
 
 The main features are:

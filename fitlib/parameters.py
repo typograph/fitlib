@@ -1,5 +1,7 @@
 """
 .. autoclass ParameterKind
+
+.. autoclass SuppliedParameters
 """
 
 import enum
@@ -47,14 +49,14 @@ class SuppliedParameter:
                  kind=ParameterKind.VIRTUAL,
                  index=None):
         self.name = name
-        self.fitted = fitted
-        self.has_adapter = has_adapter
-        self.multiplicity = multiplicity
-        self._has_initial_value = has_initial_value
+        self.fitted = fitted # Does the user want to fit this parameter
+        self.has_adapter = has_adapter # Is the name claimed by an adapter or does it need to be taken care of by DefaultAdapter
+        self.multiplicity = multiplicity # Is this a multi-value parameter
+        self._has_initial_value = has_initial_value # Was an initial vaue supplied
         self._initial_value = initial_value
         self.kind = kind
-        self.index = index
-        self.current_value = None
+        self.index = index # index in the workfunction signature
+        self.current_value = None # value to be set by the adapter at each step
 
     def set_iv(self, value):
         "Set initial value"

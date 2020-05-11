@@ -28,7 +28,10 @@ mark some parameters in `param_dict` as its own (by setting the `has_adapter` fi
 
 The adapter should support following methods:
 
-    - `read_guess(guess, i)` :
+    - `read_guesses(guess)` :
+        Convert fitting guess into internal parameter values if needed.
+        This will be called once per fitting cycle.
+    - `read_single_guess(guess, i)` :
         Convert fitting guess into parameter values in `param_dict`.
         This will be called with all i values in range(y.shape[0]).
     - `fill_coeff_dict(coeff_dict, guess, errors)` :
@@ -110,10 +113,13 @@ class EasyAdapter:
 
         return self.parameters[name]
 
-    def read_guess(self, guess, i):
+    def read_guesses(self, guess):
         for param in self.parameters.values():
             if param.fitted:
                 param.read_value(guess)
+    
+    def read_single_guess(self, guess, i=0):
+        for param in self.parameters.values():
             if param.name in self.param_dict:
                 self.param_dict[param.name].current_value = param.value_at(i)
 
@@ -131,10 +137,13 @@ class EasyAdapter:
 
 class BuildingAdapter(EasyAdapter):
     '''BuldingAdapter is a base class for adapters that need to make a set of objects
-    fittable.'''
+    fittable. It adds `get_parameter` and `build_values` to `EasyAdapter`. The first
+    function finds a parameter in the parameter dictionary and raises appropriate
+    exceptions if necessary. The second function needs to be implemented in subclasses
+    to construct values for objects that this adapter is responsible for.'''
    
-    def read_guess(self, guess, i=None):
-        super().read_guess(guess, i)
+    def read_single_guess(self, guess, i=0):
+        super().read_single_guess(guess, i)
         self.build_values(i)
             
     def get_parameter(self, name, needs_initial_value=True):
@@ -156,8 +165,6 @@ def NamedTupleAdapter(tuple_name, tuple_class):
                 (NamedTupleAdapter_base,),
                 {"tuple_parameter_name":tuple_name,
                  "tuple_class":tuple_class})
-
-
 
 class NamedTupleAdapter_base(BuildingAdapter):
     tuple_class = None

@@ -7,16 +7,14 @@ class ZTAdapter_base(BuildingAdapter):
 
     def __new__(cls, *args):
         if cls == ZTAdapter_base:
-            raise ValueError("ZTAdapter cannot be initialized directly")
+            raise ValueError("ZTAdapter_base cannot be initialized directly")
         else:
             return super().__new__(cls)
 
     def __init__(self, *args):
         super().__init__(*args)
 
-        self.atom = self.get_parameter(self.quantum_system_name)
-        self.atom.has_adapter = True
-        self.atom = self.atom.initial_value
+        self.atom = self.get_parameter(self.quantum_system_name).initial_value
         self.ZT = self.__class__.zt_accessor(self.atom)
 
         self.cartesian = 'Bx' in self.param_dict or 'By' in self.param_dict or 'Bz' in self.param_dict
@@ -27,17 +25,17 @@ class ZTAdapter_base(BuildingAdapter):
             
         if self.cartesian:
             for field in ['Bx', 'By', 'Bz']:
-                if field in self.param_dict:
+#                if field in self.param_dict:
                     self.add_parameter(field, self.ZT.__getattribute__(field))
                     
         elif self.spherical:
             for field in ['Br', 'Btheta', 'Bphi']:
-                if field in self.param_dict:
+#                if field in self.param_dict:
                     self.add_parameter(field, self.ZT.__getattribute__(field))
 
-        self.add_parameter('g', self.ZT.gFactor)
+        self.add_parameter('g', self.ZT.getg())
 
-    def build_values(self, guess, i=None):
+    def build_values(self, i):
         if self.parameters['g'].fitted: # Just in case nothing is fitted
             self.ZT.setg(self.parameters['g'].value_at(i))
             
@@ -61,17 +59,14 @@ class CFAdapter_base(BuildingAdapter):
 
     def __new__(cls, *args):
         if cls == CFAdapter_base:
-            raise ValueError("CFAdapter cannot be initialized directly")
+            raise ValueError("CFAdapter_base cannot be initialized directly")
         else:
             return super().__new__(cls)
 
     def __init__(self, *args):
         super().__init__(*args)
 
-        self.atom = self.get_parameter(self.quantum_system_name)
-#        self.atom.has_adapter = True
-        self.atom = self.atom.initial_value
-
+        self.atom = self.get_parameter(self.quantum_system_name).initial_value
         self.CF = self.__class__.cf_accessor(self.atom)
         self.fitted_orders = []
 
